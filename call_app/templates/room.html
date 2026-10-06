@@ -2,64 +2,109 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>SignVision AI - Call</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SignVision call</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
-    <header class="topbar">
-        <div class="logo">Sign<span>Vision</span> Call</div>
-        <div class="room-join">
-            Room: <input id="roomInput" value="demo-room" />
-            <button id="joinBtn" class="btn btn-primary">Join</button>
-        </div>
-        <label class="switch-wrap">
-            <span>Sign Mode</span>
-            <label class="switch">
-                <input type="checkbox" id="signModeToggle">
-                <span class="slider"></span>
-            </label>
-        </label>
-    </header>
+<a class="skip" href="#captions">Skip to captions</a>
 
-    {% if not model_ready %}
-    <div class="banner-warning">
-        No trained gesture model found yet - sign recognition is disabled until you run training/train_model.py
+<header class="top">
+    <h1>SignVision <span>call</span></h1>
+    <p id="connection" class="pill" role="status">Connecting to server</p>
+</header>
+
+<div id="alerts" class="alerts" role="alert" aria-live="assertive"></div>
+
+<section id="join" class="join" aria-labelledby="join-title">
+    <h2 id="join-title">Join a room</h2>
+    <p>Two people per room. Share the room name with the person you are calling. You need to be on the same network, or use a TURN server (see the README).</p>
+    <form id="joinForm">
+        <label for="roomInput">Room name</label>
+        <div class="row">
+            <input id="roomInput" name="room" value="demo-room" maxlength="40" pattern="[A-Za-z0-9_\-]{1,40}"
+                   autocomplete="off" spellcheck="false" aria-describedby="roomHint" required>
+            <button id="joinBtn" class="btn primary" type="submit">Join</button>
+        </div>
+        <p id="roomHint" class="hint">Letters, digits, - and _ only.</p>
+    </form>
+</section>
+
+<main id="call" class="call" hidden>
+    <div class="bar">
+        <p id="roomStatus" class="state" role="status" aria-live="polite"></p>
+        <div class="bar-actions">
+            <button id="signBtn" class="btn primary" type="button" aria-pressed="false">I will sign</button>
+            <button id="leaveBtn" class="btn" type="button">Leave</button>
+        </div>
     </div>
-    {% endif %}
 
-    <main class="call-grid">
-        <section class="video-tile">
-            <h3>You</h3>
-            <div class="video-wrap">
-                <video id="localVideo" autoplay muted playsinline></video>
-                <canvas id="localHandCanvas"></canvas>
+    <p id="modeLine" class="mode" role="status" aria-live="polite">Sign mode is off. Press "I will sign" on the screen of the person who signs.</p>
+
+    <div class="stage">
+        <section class="tile" aria-labelledby="youLabel">
+            <h2 id="youLabel">You <span id="youRole" class="tag">Not signing</span></h2>
+            <div class="frame">
+                <video id="localVideo" autoplay muted playsinline aria-label="Your camera"></video>
+                <canvas id="localHandCanvas" aria-hidden="true"></canvas>
+                <p id="localNote" class="note" hidden></p>
             </div>
-            <div class="caption" id="localCaption">&nbsp;</div>
         </section>
 
-        <section class="video-tile">
-            <h3>Other Participant</h3>
-            <div class="video-wrap">
-                <video id="remoteVideo" autoplay playsinline></video>
-                <canvas id="skeletonCanvas" width="480" height="480"></canvas>
+        <section class="tile" aria-labelledby="otherLabel">
+            <h2 id="otherLabel">Other person <span id="otherRole" class="tag">Not here</span></h2>
+            <div class="frame">
+                <video id="remoteVideo" autoplay playsinline aria-label="The other person's camera"></video>
+                <p id="remoteNote" class="note">Waiting for someone to join.</p>
             </div>
-            <div class="caption" id="remoteCaption">&nbsp;</div>
         </section>
-    </main>
+    </div>
 
-    <footer class="call-footer">
-        <div class="footer-info">
-            <strong>How sign mode works:</strong>
-            Toggle it on when one participant is deaf. Both screens change:
-            the hearing side sees the deaf side's signs translated to text/speech,
-            and the deaf side sees the hearing side's speech translated to an
-            animated sign skeleton.
-        </div>
-    </footer>
+    <div class="panels">
+        <section id="captions" class="captions" aria-labelledby="capTitle" tabindex="-1">
+            <h2 id="capTitle">What is being signed</h2>
+            <p class="word" id="wordOut" aria-live="polite" aria-atomic="true"><span class="empty">Nothing yet</span></p>
+            <div class="reading">
+                <p class="letter"><span class="label">Current letter</span> <strong id="letterOut">none</strong></p>
+                <div class="confidence">
+                    <span class="label" id="confLabel">Confidence</span>
+                    <meter id="confMeter" min="0" max="100" value="0" aria-labelledby="confLabel"></meter>
+                    <strong id="confOut">0%</strong>
+                </div>
+            </div>
+            <p class="hint">A letter is added after about a second of holding it still. Confidence below 85% is ignored.</p>
+            <div class="row">
+                <button id="sendBtn" class="btn primary" type="button" disabled>Send word</button>
+                <button id="backBtn" class="btn" type="button" disabled>Delete last letter</button>
+            </div>
+            <label class="check"><input type="checkbox" id="speakAloud" checked> Read sent words aloud on the other person's screen</label>
+        </section>
 
-    <script src="{{ url_for('static', filename='js/vendor/socket.io.min.js') }}"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-    <script src="{{ url_for('static', filename='js/call.js') }}"></script>
+        <section class="talk" aria-labelledby="talkTitle">
+            <h2 id="talkTitle">What is being said</h2>
+            <p id="heard" class="heard" aria-live="polite"><span class="empty">Nothing yet</span></p>
+            <p id="speechStatus" class="hint">Speech recognition starts on the screen of the person who is not signing.</p>
+            <div class="skeleton">
+                <canvas id="skeletonCanvas" width="640" height="480" role="img" aria-label="Sign animation of the last matched phrase"></canvas>
+                <p id="skeletonLabel" class="label">No phrase played yet</p>
+                <button id="replayBtn" class="btn" type="button" disabled>Play again</button>
+            </div>
+            <p class="hint">I only know these phrases: <span id="phraseList">loading</span>. Anything else shows as text only.</p>
+        </section>
+    </div>
+
+    <section class="log" aria-labelledby="logTitle">
+        <h2 id="logTitle">Conversation</h2>
+        <ol id="logList"></ol>
+    </section>
+</main>
+
+<footer class="foot">
+    <p>Recognises the letters A to J only. Phrases: hello, help, no, thank you, yes.</p>
+</footer>
+
+<script src="{{ url_for('static', filename='js/vendor/socket.io.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/mediapipe-hands/hands.js') }}"></script>
+<script src="{{ url_for('static', filename='js/call.js') }}"></script>
 </body>
 </html>

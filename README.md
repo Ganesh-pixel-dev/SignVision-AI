@@ -1,173 +1,112 @@
 # SignVision AI
 
-Real-time Indian Sign Language recognition + a two-person video call
-where one participant can be deaf: their signs are translated to
-text/speech for the hearing participant, and the hearing participant's
-speech is translated into an animated sign-language skeleton for the
-deaf participant.
+I built this to see how far a small model on hand landmarks could go for Indian Sign Language fingerspelling, and to put it inside a video call where one person can be deaf. MediaPipe finds 21 hand points in each webcam frame, a small neural network guesses the letter, and a word builder turns the noisy per-frame guesses into words. In the call, the signed word is shown as large captions (and read aloud) on the hearing person's screen. When the hearing person speaks, any phrase I recorded (hello, help, no, thank you, yes) is replayed as an animated hand and arm skeleton for the deaf person.
 
-## What's actually in this project (honest scope)
+It knows the letters A to J and five phrases. That is all. See Limits.
 
-| Feature | Status |
-|---|---|
-| Hand landmark detection (MediaPipe) | ✅ Fully working |
-| Letter/gesture classification (neural network on landmarks) | ✅ Fully working, you train it on your own recorded data |
-| Word building + text-to-speech | ✅ Fully working |
-| Standalone sign→text web app (Stage 1) | ✅ Fully working |
-| Skeleton recording/playback for common phrases | ✅ Fully working |
-| Two-person video call (WebRTC) | ✅ Working on localhost / same network |
-| Sign-mode toggle (shared, both screens change) | ✅ Fully working |
-| Speech → sign-skeleton translation | ✅ Working, but limited to a **library of phrases you record yourself** — this is a deliberate, honest design choice (see below) |
-| "True" AI-generated sign language for arbitrary sentences | ❌ Not implemented — this is an unsolved research problem industry-wide, not something skipped due to laziness |
+![Call screen](docs/screenshots/after-call-signer-desktop.png)
 
-**Why speech→sign uses a recorded phrase library instead of generating
-new signs:** Generating fluent, grammatically correct sign language
-from arbitrary text is an open research problem — no one (including
-well-funded companies) has fully solved it. Instead, this project
-records a real person performing common words/phrases once via
-MediaPipe, saves the landmark motion, and replays it as a skeleton
-animation whenever that word is needed. This is the same practical
-approach real sign-language-tech products use for their MVP stage.
+## Run it
 
-## Project structure
-
-```
-SignVision_AI/
-├── core/                     # Shared building blocks
-│   ├── hand_tracker.py       # MediaPipe wrapper + landmark normalization
-│   ├── gesture_classifier.py # Loads trained model, predicts letter/gesture
-│   └── word_builder.py       # Smooths noisy predictions into clean words
-│
-├── data_collection/
-│   └── collect_landmarks.py  # Webcam tool to record training samples
-│
-├── training/
-│   ├── dataset/               # Your recorded landmarks.csv goes here
-│   └── train_model.py         # Trains the neural network classifier
-│
-├── model/                     # Trained model + label map saved here
-│
-├── speech/
-│   ├── text_to_speech.py     # Offline TTS (pyttsx3)
-│   └── speech_to_text.py     # Mic -> text (used standalone/testing)
-│
-├── skeleton/
-│   ├── recorder.py            # Record a phrase as a skeleton animation
-│   ├── player.py               # Preview a recorded phrase (CLI)
-│   └── library/                # Saved phrase recordings (.json)
-│
-├── webapp/                    # STAGE 1: standalone sign->text demo
-│   ├── app.py
-│   ├── templates/index.html
-│   └── static/
-│
-└── call_app/                  # STAGE 4: full 2-person call demo
-    ├── server.py               # Signaling + translation bridge server
-    ├── templates/room.html
-    └── static/
-```
-
-## Setup
+Python 3.10.
 
 ```bash
-python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
+python -m venv .venv
+.venv\Scripts\activate            # macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
+python -m pytest                  # 46 tests
 ```
 
-**Note on PyAudio:** if `pip install pyaudio` fails on Windows, install
-via `pip install pipwin && pipwin install pyaudio`. On Mac: `brew
-install portaudio` first. On Linux: `sudo apt install portaudio19-dev`
-first.
-
-## Step-by-step: building your own working demo
-
-### 1. Collect training data (needs your webcam)
+Call app (two people, two browser windows):
 
 ```bash
-python data_collection/collect_landmarks.py
+python call_app/server.py         # http://localhost:5001
 ```
 
-By default this records 10 classes (A-J). Hold up each sign and press
-its letter key to save a sample. Aim for **150-300 samples per class**,
-varying hand angle and distance a bit. Edit the `CLASSES` list at the
-top of the script to add more letters/gestures once the pipeline works.
+Open `http://localhost:5001` in two windows, join the same room name. On the screen of the person who signs, press "I will sign". Use Chrome or Edge: speech recognition is the browser's own and Chrome and Edge send the audio to an online service, so it needs internet. Camera and microphone only work on `localhost` or HTTPS. Opening the page from another device at `http://192.168.x.x:5001` will not give that device a camera unless you serve it over HTTPS.
 
-### 2. Train the classifier
+Single-user letters demo (reads the server's webcam, speaks with pyttsx3):
 
 ```bash
-python training/train_model.py
+python webapp/app.py              # http://localhost:5000
 ```
 
-This trains a small feed-forward neural network on the landmark
-vectors (not raw images — faster and more accurate for this task, see
-comments in `training/train_model.py` for why). Saves the model to
-`model/gesture_model.h5`.
+Settings are environment variables, listed in `.env.example` (copy it to `.env`): `SECRET_KEY`, `CORS_ORIGINS`, `HOST`, `PORT`, `ICE_SERVERS`, `CAMERA_INDEX`. Both servers listen on 127.0.0.1 and run with debug off unless you change that.
 
-### 3. Try the standalone sign→text demo
+## How it works
+
+- `core/features.py` turns 21 landmarks into 63 numbers: wrist at the origin, wrist to middle-finger-knuckle distance set to 1. This one function is used by data collection, training, the webapp and the call server, so they cannot drift apart. Position and distance from the camera do not change the result. Hand rotation does.
+- Mirroring: the training samples were recorded from a flipped (selfie) frame. The browser sends the unflipped frame, so the server mirrors x before classifying (`BROWSER_MIRRORED`). A test checks this equals flipping the image. Before this fix, the call app fed the model mirrored hands. The model has no left/right hand input; it saw one hand in training.
+- `core/gesture_classifier.py`: Keras network, 63 inputs, dense layers 128, 64, 32, softmax over 10 letters.
+- `core/word_builder.py`: a letter is added after 15 frames in a row of the same letter at 85% confidence or more. It is not added again until the sign has been absent for 5 frames (hand gone, low confidence or another letter), so a double letter needs the hand to leave for a moment.
+- `call_app/server.py`: Flask-SocketIO. Rooms hold two people. The server decides who the signer is and only accepts landmarks from them. Speech text is matched to the phrase library by whole words, in spoken order.
+- `skeleton/library/*.json`: phrases recorded once with MediaPipe Holistic and replayed. Frames where a hand was not detected are filled from the nearest detected frame so the hand does not flicker.
+- The MediaPipe Hands files for the browser are in `call_app/static/vendor/` so sign mode does not depend on a CDN.
+
+## Measured results
+
+Data: `training/dataset/landmarks.csv`, 1,992 samples, letters A to J (A 161, B 176, C 165, D 133, E 228, F 230, G 177, H 276, I 346, J 100), recorded by me, one hand, one camera.
+
+The CSV has no session column. Rows were appended in time order, so a run of one letter in a row is one continuous recording. There are 12 such blocks (A has two). Neighbouring samples in a block are almost identical, so a random split leaks. I report both:
+
+| Split | Logistic regression | kNN (k=5) | Keras network (shipped) |
+|---|---|---|---|
+| Random 80/20 (inflated, do not trust) | 98.0% | 99.3% | 97.7% |
+| Temporal: last 20% of each block held out, 10 samples dropped before it (1,490 train, 392 test) | 73.5% | 71.7% | 74.5% (seed 42); 81.8% mean over 5 seeds, range 79.6 to 83.7% |
+
+The temporal split is the number to quote: **about 75 to 82% on held-out samples from the same person, session and camera.** It does not tell you how it does for another person, hand, light or camera. I expect that to be worse and have not measured it. I kept the Keras network because it beat both simple baselines on average across seeds, though one seed was close to logistic regression. The shipped model is trained on all samples with a fixed 60 epochs, so it cannot be scored again; `training/evaluate.py` fits the same recipe on the train part.
+
+Per letter on the temporal split (Keras, seed 42; full tables and the confusion matrix are in `model/metrics.json`):
+
+| Letter | A | B | C | D | E | F | G | H | I | J |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Precision | 1.00 | 0.00 | 0.52 | 0.79 | 0.83 | 0.83 | 1.00 | 1.00 | 0.98 | 0.36 |
+| Recall | 1.00 | 0.00 | 1.00 | 1.00 | 1.00 | 0.73 | 0.77 | 0.75 | 0.57 | 0.95 |
+
+B is never recognised on held-out data: the end of my B recording looks like C to the model (29 of 35 test B samples were called C), so the hand shape drifted during that recording. I is often called J (24 of 69). Both are in the confusion matrix.
+
+Reproduce:
 
 ```bash
-python webapp/app.py
+python training/evaluate.py       # writes model/metrics.json
+python training/train_model.py    # writes model/gesture_model.keras
 ```
 
-Open `http://localhost:5000`. Sign a letter, watch it build into a
-word, click Speak.
+Note: I could not test with a real webcam. Recognition in the browser is covered by the normalisation tests, not by a live run.
 
-### 4. Record some sign phrases (for the speech→sign side)
+## Limits
 
-```bash
-python skeleton/recorder.py "HELLO"
-python skeleton/recorder.py "THANK YOU"
-python skeleton/recorder.py "YES"
-python skeleton/recorder.py "NO"
-python skeleton/recorder.py "HELP"
+- Letters A to J only. Phrases: hello, help, no, thank you, yes. Nothing else is recognised or signed. Other words show as text only.
+- Static hand shapes only. Signs defined by motion (J in particular) are judged from a single frame.
+- One person's data. Accuracy for other people is unknown.
+- Speech to sign is matching recorded phrases, not generating sign language. The recorded phrases are one take each, and "hello" has the hand detected in only some frames.
+- Calls across the internet usually need a TURN server (below).
+- Two people per room. A third is refused.
+
+### Adding letters or phrases
+
+New letters need new recordings. Nothing is guessed.
+
+1. Add the letter to `CLASSES` at the top of `data_collection/collect_landmarks.py`.
+2. `python data_collection/collect_landmarks.py`. Hold the sign, tap its key to save a sample (it prints each save). Aim for 150 to 300 per letter. Record each letter in more than one sitting, with a break in between, and vary distance, angle and lighting. Recording a letter in one unbroken run is exactly what makes the held-out score optimistic.
+3. `python training/evaluate.py`, read the per-letter recall, then `python training/train_model.py`.
+4. The label map and class count come from the CSV, so nothing else needs editing.
+
+New phrases: `python skeleton/recorder.py "GOOD MORNING"`, SPACE to start and stop. The file lands in `skeleton/library/` and is picked up on the next speech match.
+
+## Calls across the internet
+
+WebRTC tries to connect the two browsers directly. Behind home routers and firewalls it needs help. A STUN server (the default, a public Google one) only tells each browser its public address. That works on one network and on some others. When either side is behind a strict NAT (many mobile networks and offices), no direct path exists, and the video has to be relayed by a TURN server. I did not build or host one. Set one in `.env`:
+
+```
+ICE_SERVERS=[{"urls":"stun:stun.l.google.com:19302"},{"urls":"turn:turn.example.com:3478","username":"user","credential":"secret"}]
 ```
 
-Press SPACE to start, sign the phrase, press SPACE again to stop &
-save. Preview any recording with:
+The browsers get this list from `/config`. A TURN credential in that list is visible to anyone who opens the page, so use short-lived credentials from your TURN provider. The signalling server itself also has to be reachable and served over HTTPS for cameras to work off localhost.
 
-```bash
-python skeleton/player.py "HELLO"
-```
+## Data and files
 
-### 5. Run the full two-person call demo
-
-```bash
-python call_app/server.py
-```
-
-Open `http://localhost:5001` in **two different browser tabs** (or two
-devices on the same network, using your machine's local IP instead of
-localhost). Use **Chrome** — the speech recognition piece relies on
-the Web Speech API, which Chrome supports best.
-
-1. Both tabs: enter the same room name, click Join.
-2. Toggle **Sign Mode** on (either side) — both screens switch.
-3. In one tab, hold up a trained hand sign — the other tab shows the
-   caption + word building live.
-4. In the other tab, speak one of your recorded phrases (e.g. say
-   "hello") — the first tab shows an animated skeleton performing it.
-
-## Known limitations (be upfront about these if presenting this)
-
-- **Speech→sign is phrase-matching, not generation.** Only phrases
-  you've recorded will animate; anything else just shows as a caption.
-- **WebRTC here uses only a public STUN server, no TURN server.**
-  Works reliably on localhost or the same network. Calling across
-  different networks/firewalls may fail without a TURN server — that's
-  a networking/infrastructure addition, not an AI limitation.
-- **Single active room state** in `call_app/server.py` — fine for a
-  demo, would need per-room isolation for many simultaneous calls.
-- **Landmark-based classification works best for static hand shapes**
-  (like fingerspelling letters). Signs that are primarily defined by
-  *motion* (many real ISL words) would need a sequence model (e.g. an
-  LSTM over landmark sequences) rather than a single-frame classifier
-  — a natural next step once the letter-level pipeline is solid.
-
-## Suggested next steps / future enhancements
-
-- Expand from 10 letters to the full alphabet, then to common words
-- Add a sequence model (LSTM/GRU on landmark sequences) for motion-based signs
-- Smooth skeleton playback transitions between consecutive phrases
-- Add a TURN server for cross-network calling
-- Mobile app version
+- `training/dataset/landmarks.csv`: my recorded samples (1.4 MB, committed). Do not overwrite it. `collect_landmarks.py` only appends.
+- `skeleton/library/`: my phrase recordings (committed).
+- `model/gesture_model.keras`, `label_map.json`, `metrics.json`.
+- `docs/screenshots/`: before and after, taken with `tools/screenshots.py` and `tools/flow_check.py` (Edge with a fake camera, so no hand is ever seen in them).

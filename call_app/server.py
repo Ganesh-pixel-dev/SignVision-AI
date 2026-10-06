@@ -11,6 +11,7 @@ Settings come from environment variables, see .env.example.
 """
 
 import json
+import mimetypes
 import os
 import re
 import secrets
@@ -32,6 +33,7 @@ MAX_PEOPLE = 2
 MAX_SPEECH_CHARS = 300
 MAX_SIGNAL_BYTES = 20000
 MIN_LANDMARK_INTERVAL = 0.04  # seconds; messages arriving faster are dropped
+mimetypes.add_type("application/wasm", ".wasm")
 DEFAULT_ICE_SERVERS = [{"urls": "stun:stun.l.google.com:19302"}]
 
 

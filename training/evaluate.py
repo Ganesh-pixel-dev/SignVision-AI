@@ -43,8 +43,11 @@ class KerasWrapper:
         return np.argmax(self.model.predict(X, verbose=0), axis=1)
 
 
+NUM_CLASSES = 10
+
+
 def make_keras(seed=SEED):
-    return KerasWrapper(num_classes=10, seed=seed)
+    return KerasWrapper(num_classes=NUM_CLASSES, seed=seed)
 
 
 def report(y_true, y_pred, classes):
@@ -63,7 +66,9 @@ def report(y_true, y_pred, classes):
 
 def main():
     X, labels = load()
+    global NUM_CLASSES
     classes = sorted(set(labels))
+    NUM_CLASSES = len(classes)
     y = np.array([classes.index(l) for l in labels])
 
     tr, te = temporal_split(labels)

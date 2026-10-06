@@ -2,51 +2,37 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>SignVision AI</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SignVision letters</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
-    <header class="topbar">
-        <div class="logo">Sign<span>Vision</span> AI</div>
-        <div class="status" id="modelStatus">Checking model...</div>
-    </header>
+<header class="top">
+    <h1>SignVision <span>letters</span></h1>
+    <p id="status" class="pill" role="status">Checking</p>
+</header>
+<p id="alert" class="alert" role="alert" hidden></p>
 
-    <main class="dashboard">
-        <section class="camera-panel">
-            <img src="{{ url_for('video_feed') }}" alt="Live camera feed">
-        </section>
+<main class="wrap">
+    <section class="cam" aria-label="Camera">
+        <img src="{{ url_for('video_feed') }}" alt="Live camera with hand outline">
+    </section>
 
-        <section class="info-panel">
-            <div class="card">
-                <div class="card-label">Detected Letter</div>
-                <div class="big-letter" id="detectedLetter">-</div>
-            </div>
-
-            <div class="card">
-                <div class="card-label">Confidence</div>
-                <div class="confidence-bar-bg">
-                    <div class="confidence-bar-fill" id="confidenceFill"></div>
-                </div>
-                <div class="confidence-text" id="confidenceText">0%</div>
-            </div>
-
-            <div class="card">
-                <div class="card-label">Current Word</div>
-                <div class="current-word" id="currentWord">&nbsp;</div>
-                <div class="button-row">
-                    <button id="speakBtn" class="btn btn-primary">🔊 Speak</button>
-                    <button id="backspaceBtn" class="btn">⌫ Backspace</button>
-                    <button id="resetBtn" class="btn btn-danger">Reset</button>
-                </div>
-            </div>
-
-            <div class="card history-card">
-                <div class="card-label">Recognition History</div>
-                <ul id="historyList"></ul>
-            </div>
-        </section>
-    </main>
-
-    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <section class="out" aria-labelledby="wt">
+        <h2 id="wt">Word so far</h2>
+        <p class="word" id="word" aria-live="polite" aria-atomic="true">Nothing yet</p>
+        <p class="reading">Letter <strong id="letter">none</strong>
+            Confidence <meter id="conf" min="0" max="100" value="0" aria-label="Confidence"></meter> <strong id="confText">0%</strong></p>
+        <div class="row">
+            <button id="speakBtn" class="btn primary" type="button">Speak and clear</button>
+            <button id="backBtn" class="btn" type="button">Delete last letter</button>
+            <button id="resetBtn" class="btn" type="button">Clear</button>
+        </div>
+        <h2>Spoken words</h2>
+        <ol id="history"></ol>
+        <p class="hint">Letters A to J only. A letter is added after about a second of holding it still.</p>
+    </section>
+</main>
+<script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
 </html>

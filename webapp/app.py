@@ -1,133 +1,144 @@
-"""
-app.py
--------
-RUN THIS ON YOUR OWN MACHINE (needs a real webcam + trained model).
+"""Single-user sign to text demo that reads the server's own webcam.
 
-Flask web app for Stage 1: Sign -> Text -> Speech.
+Run: python webapp/app.py   (http://127.0.0.1:5000)
 
-Before running:
-    1. Collect data:  python data_collection/collect_landmarks.py
-    2. Train model:   python training/train_model.py
-    3. Run this app:  python webapp/app.py
-    4. Open browser:  http://localhost:5000
+One background thread reads the camera, finds the hand, classifies the
+letter and feeds the word builder. The browser polls /state and shows
+the camera as an MJPEG stream. Settings come from environment variables,
+see .env.example.
 """
 
 import os
 import sys
 import threading
+import time
 
 import cv2
-from flask import Flask, Response, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.hand_tracker import HandTracker
-from core.gesture_classifier import GestureClassifier
 from core.word_builder import WordBuilder
-from speech.text_to_speech import TextToSpeech
 
-app = Flask(__name__)
-
-# ---- Shared state (single-user local demo; not multi-user safe) ----
-tracker = HandTracker(max_hands=1)
-word_builder = WordBuilder(hold_frames=15, confidence_threshold=0.85)
-tts = TextToSpeech()
-
-try:
-    classifier = GestureClassifier()
-    MODEL_READY = True
-except FileNotFoundError as e:
-    print(f"[WARNING] {e}")
-    classifier = None
-    MODEL_READY = False
-
-state_lock = threading.Lock()
-latest_state = {
-    "letter": None,
-    "confidence": 0.0,
-    "word": "",
-    "history": [],
-    "model_ready": MODEL_READY,
-}
-
-camera = cv2.VideoCapture(0)
+CAMERA_INDEX = int(os.environ.get("CAMERA_INDEX", "0"))
 
 
-def generate_frames():
-    while True:
-        ok, frame = camera.read()
-        if not ok:
-            break
-        frame = cv2.flip(frame, 1)
-        results = tracker.process(frame)
-        frame = tracker.draw_landmarks(frame, results)
+class Recognizer(threading.Thread):
+    """Reads frames, updates the shared state, keeps the latest JPEG."""
 
+    def __init__(self, classifier, camera_index=CAMERA_INDEX):
+        super().__init__(daemon=True)
+        self.classifier = classifier
+        self.camera_index = camera_index
+        self.lock = threading.Lock()
+        self.words = WordBuilder()
+        self.letter, self.confidence = None, 0.0
+        self.camera_ok = None
+        self.jpeg = None
+        self.halt = threading.Event()
+
+    def run(self):
+        from core.hand_tracker import HandTracker
+        capture = cv2.VideoCapture(self.camera_index)
+        if not capture.isOpened():
+            self.camera_ok = False
+            return
+        self.camera_ok = True
+        tracker = HandTracker(max_hands=1)
+        while not self.halt.is_set():
+            ok, frame = capture.read()
+            if not ok:
+                self.camera_ok = False
+                break
+            frame = cv2.flip(frame, 1)
+            results = tracker.process(frame)
+            frame = tracker.draw_landmarks(frame, results)
+            self.step(HandTracker.extract_feature_vector(results))
+            ok, buf = cv2.imencode(".jpg", frame)
+            if ok:
+                with self.lock:
+                    self.jpeg = buf.tobytes()
+        capture.release()
+
+    def step(self, features):
+        """Handle one frame's features. None means no hand was found."""
         letter, confidence = None, 0.0
-        if MODEL_READY:
-            feature_vector = HandTracker.extract_feature_vector(results)
-            if feature_vector is not None:
-                letter, confidence = classifier.predict(feature_vector)
-                word_builder.update(letter, confidence)
+        if features is not None and self.classifier is not None:
+            letter, confidence = self.classifier.predict(features)
+        with self.lock:
+            self.letter, self.confidence = letter, confidence
+            self.words.update(letter, confidence)
 
-        with state_lock:
-            latest_state["letter"] = letter
-            latest_state["confidence"] = round(confidence * 100, 1)
-            latest_state["word"] = word_builder.current_word
-            latest_state["history"] = list(word_builder.history)
-
-        # overlay for the raw video feed too (nice for demos/screenshots)
-        if letter:
-            cv2.putText(frame, f"{letter} ({confidence*100:.1f}%)", (10, 40),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
-
-        ok, buffer = cv2.imencode(".jpg", frame)
-        if not ok:
-            continue
-        frame_bytes = buffer.tobytes()
-        yield (b"--frame\r\n"
-               b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n")
+    def snapshot(self):
+        with self.lock:
+            return {
+                "letter": self.letter,
+                "confidence": round(self.confidence * 100, 1),
+                "word": self.words.current_word,
+                "history": list(self.words.history),
+                "model_ready": self.classifier is not None,
+                "camera_ok": self.camera_ok,
+            }
 
 
-@app.route("/")
-def index():
-    return render_template("index.html")
+def create_app(recognizer, tts):
+    app = Flask(__name__)
 
+    @app.route("/")
+    def index():
+        return render_template("index.html")
 
-@app.route("/video_feed")
-def video_feed():
-    return Response(generate_frames(), mimetype="multipart/x-mixed-replace; boundary=frame")
+    @app.route("/video_feed")
+    def video_feed():
+        def frames():
+            while recognizer.camera_ok is not False:
+                with recognizer.lock:
+                    jpeg = recognizer.jpeg
+                if jpeg:
+                    yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
+                time.sleep(0.04)
+        return Response(frames(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
+    @app.route("/state")
+    def state():
+        return jsonify(recognizer.snapshot())
 
-@app.route("/state")
-def get_state():
-    with state_lock:
-        return jsonify(latest_state)
+    @app.route("/speak", methods=["POST"])
+    def speak():
+        with recognizer.lock:
+            word = recognizer.words.commit_word()
+        if not word:
+            return jsonify({"spoken": "", "ok": True})
+        ok = tts.speak_async(word)
+        error = None if ok else "Text to speech is not available on this machine."
+        return jsonify({"spoken": word, "ok": ok, "error": error})
 
+    @app.route("/reset", methods=["POST"])
+    def reset():
+        with recognizer.lock:
+            recognizer.words.reset()
+        return jsonify({"status": "reset"})
 
-@app.route("/speak", methods=["POST"])
-def speak():
-    with state_lock:
-        word = word_builder.commit_word()
-    if word:
-        threading.Thread(target=tts.speak, args=(word,), daemon=True).start()
-    return jsonify({"spoken": word})
+    @app.route("/backspace", methods=["POST"])
+    def backspace():
+        with recognizer.lock:
+            recognizer.words.backspace()
+            return jsonify({"word": recognizer.words.current_word})
 
-
-@app.route("/reset", methods=["POST"])
-def reset():
-    word_builder.reset()
-    return jsonify({"status": "reset"})
-
-
-@app.route("/backspace", methods=["POST"])
-def backspace():
-    word_builder.backspace()
-    return jsonify({"word": word_builder.current_word})
+    return app
 
 
 if __name__ == "__main__":
-    if not MODEL_READY:
-        print("=" * 60)
-        print("No trained model found yet - the app will run but won't")
-        print("predict letters until you run training/train_model.py")
-        print("=" * 60)
-    app.run(debug=True, threaded=True)
+    from speech.text_to_speech import TextToSpeech
+
+    try:
+        from core.gesture_classifier import GestureClassifier
+        classifier = GestureClassifier()
+    except FileNotFoundError as exc:
+        print(f"[warning] {exc} Letters will not be recognised.")
+        classifier = None
+
+    recognizer = Recognizer(classifier)
+    recognizer.start()
+    app = create_app(recognizer, TextToSpeech())
+    app.run(host=os.environ.get("HOST", "127.0.0.1"), port=int(os.environ.get("WEBAPP_PORT", "5000")),
+            threaded=True, debug=False)

@@ -1,48 +1,58 @@
-const detectedLetter = document.getElementById("detectedLetter");
-const confidenceFill = document.getElementById("confidenceFill");
-const confidenceText = document.getElementById("confidenceText");
-const currentWord = document.getElementById("currentWord");
-const historyList = document.getElementById("historyList");
-const modelStatus = document.getElementById("modelStatus");
+"use strict";
 
-async function pollState() {
+const $ = (id) => document.getElementById(id);
+
+function setAlert(message) {
+    $("alert").hidden = !message;
+    $("alert").textContent = message || "";
+}
+
+function setStatus(text, ok) {
+    $("status").textContent = text;
+    $("status").dataset.ok = String(ok);
+}
+
+async function poll() {
     try {
-        const res = await fetch("/state");
-        const data = await res.json();
-
-        detectedLetter.textContent = data.letter || "-";
-        confidenceFill.style.width = `${data.confidence}%`;
-        confidenceText.textContent = `${data.confidence}%`;
-        currentWord.textContent = data.word || "\u00A0";
-
-        historyList.innerHTML = "";
-        [...data.history].reverse().forEach((word) => {
+        const d = await (await fetch("/state")).json();
+        $("word").textContent = d.word || "Nothing yet";
+        $("letter").textContent = d.letter || "none";
+        $("conf").value = d.confidence;
+        $("confText").textContent = `${Math.round(d.confidence)}%`;
+        $("history").replaceChildren(...[...d.history].reverse().map((w) => {
             const li = document.createElement("li");
-            li.textContent = word;
-            historyList.appendChild(li);
-        });
-
-        modelStatus.textContent = data.model_ready
-            ? "● Model loaded"
-            : "⚠ No trained model - run training/train_model.py";
-        modelStatus.style.color = data.model_ready ? "#4fd1c5" : "#ff8a3d";
+            li.textContent = w;
+            return li;
+        }));
+        if (d.camera_ok === false) {
+            setStatus("No camera", false);
+            setAlert("The server could not open the camera. Close other apps using it, or set CAMERA_INDEX, then restart.");
+        } else if (!d.model_ready) {
+            setStatus("No model", false);
+            setAlert("No trained model found. Run training/train_model.py, then restart.");
+        } else {
+            setStatus(d.camera_ok ? "Running" : "Starting camera", Boolean(d.camera_ok));
+            setAlert("");
+        }
     } catch (err) {
-        modelStatus.textContent = "⚠ Connection lost";
-        modelStatus.style.color = "#ff5c5c";
+        setStatus("Server not reachable", false);
     }
 }
 
-document.getElementById("speakBtn").addEventListener("click", async () => {
-    await fetch("/speak", { method: "POST" });
-});
+async function post(path) {
+    try {
+        const res = await fetch(path, { method: "POST" });
+        const d = await res.json();
+        if (d.error) setAlert(d.error);
+    } catch (err) {
+        setAlert("Could not reach the server.");
+    }
+    poll();
+}
 
-document.getElementById("resetBtn").addEventListener("click", async () => {
-    await fetch("/reset", { method: "POST" });
-});
+$("speakBtn").addEventListener("click", () => post("/speak"));
+$("resetBtn").addEventListener("click", () => post("/reset"));
+$("backBtn").addEventListener("click", () => post("/backspace"));
 
-document.getElementById("backspaceBtn").addEventListener("click", async () => {
-    await fetch("/backspace", { method: "POST" });
-});
-
-setInterval(pollState, 300);
-pollState();
+setInterval(poll, 300);
+poll();
