@@ -14,7 +14,8 @@ Why landmarks instead of raw images?
 
 import cv2
 import mediapipe as mp
-import numpy as np
+
+from core.features import normalize_landmarks
 
 
 class HandTracker:
@@ -54,33 +55,12 @@ class HandTracker:
 
     @staticmethod
     def extract_feature_vector(results):
-        """
-        Converts MediaPipe's hand landmarks into a flat, normalized
-        63-number vector (21 points x, y, z) ready for the classifier.
+        """Normalised 63-number vector for the first detected hand, or None.
 
-        Normalization strategy:
-        - Translate so the wrist (landmark 0) is the origin.
-        - Scale so the distance from wrist to middle-finger MCP (landmark 9)
-          is 1.0.
-        This makes the vector roughly invariant to hand position on
-        screen and distance from the camera.
-
-        Returns None if no hand was detected.
+        The frame passed to process() must already be flipped, as the data
+        collector and the webapp do, so no mirroring is applied here.
         """
         if not results.multi_hand_landmarks:
             return None
-
-        hand_landmarks = results.multi_hand_landmarks[0]
-        points = np.array(
-            [[lm.x, lm.y, lm.z] for lm in hand_landmarks.landmark], dtype=np.float32
-        )
-
-        wrist = points[0].copy()
-        points -= wrist  # translate
-
-        scale_ref = np.linalg.norm(points[9])  # wrist -> middle finger MCP
-        if scale_ref < 1e-6:
-            scale_ref = 1e-6
-        points /= scale_ref  # scale
-
-        return points.flatten()  # shape (63,)
+        landmarks = results.multi_hand_landmarks[0].landmark
+        return normalize_landmarks([[lm.x, lm.y, lm.z] for lm in landmarks])

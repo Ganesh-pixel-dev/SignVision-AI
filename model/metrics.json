@@ -1,0 +1,644 @@
+{
+  "dataset": {
+    "file": "training/dataset/landmarks.csv",
+    "samples": 1992,
+    "per_letter": {
+      "A": 161,
+      "B": 176,
+      "C": 165,
+      "D": 133,
+      "E": 228,
+      "F": 230,
+      "G": 177,
+      "H": 276,
+      "I": 346,
+      "J": 100
+    },
+    "recording_blocks": 21,
+    "recorded_by": "one person, one hand, one camera"
+  },
+  "split": {
+    "main": "temporal: last 20% of each recording block held out, 10 samples dropped before it. 1490 train, 392 test.",
+    "optimistic_for_comparison": "random stratified 80/20. 1593 train, 399 test. Near-duplicate neighbours land on both sides, so this number is inflated.",
+    "caveat": "Every recording block is one continuous hold by the same person in the same session, so even the temporal split does not test new people, hands, lighting or cameras."
+  },
+  "models": {
+    "logistic_regression": {
+      "temporal_split": {
+        "accuracy": 0.7347,
+        "per_letter": {
+          "A": {
+            "precision": 1.0,
+            "recall": 0.9355,
+            "f1": 0.9667,
+            "test_samples": 31
+          },
+          "B": {
+            "precision": 0.125,
+            "recall": 0.0857,
+            "f1": 0.1017,
+            "test_samples": 35
+          },
+          "C": {
+            "precision": 1.0,
+            "recall": 0.4688,
+            "f1": 0.6383,
+            "test_samples": 32
+          },
+          "D": {
+            "precision": 0.8125,
+            "recall": 1.0,
+            "f1": 0.8966,
+            "test_samples": 26
+          },
+          "E": {
+            "precision": 0.8333,
+            "recall": 1.0,
+            "f1": 0.9091,
+            "test_samples": 45
+          },
+          "F": {
+            "precision": 0.5091,
+            "recall": 0.6222,
+            "f1": 0.56,
+            "test_samples": 45
+          },
+          "G": {
+            "precision": 1.0,
+            "recall": 0.8,
+            "f1": 0.8889,
+            "test_samples": 35
+          },
+          "H": {
+            "precision": 0.7692,
+            "recall": 0.9091,
+            "f1": 0.8333,
+            "test_samples": 55
+          },
+          "I": {
+            "precision": 0.8846,
+            "recall": 0.6667,
+            "f1": 0.7603,
+            "test_samples": 69
+          },
+          "J": {
+            "precision": 0.4737,
+            "recall": 0.9474,
+            "f1": 0.6316,
+            "test_samples": 19
+          }
+        },
+        "confusion_matrix": {
+          "labels": [
+            "A",
+            "B",
+            "C",
+            "D",
+            "E",
+            "F",
+            "G",
+            "H",
+            "I",
+            "J"
+          ],
+          "rows_are_true_columns_are_predicted": [
+            [
+              29,
+              0,
+              0,
+              0,
+              2,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              3,
+              0,
+              0,
+              0,
+              27,
+              0,
+              0,
+              5,
+              0
+            ],
+            [
+              0,
+              0,
+              15,
+              0,
+              2,
+              0,
+              0,
+              15,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              26,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              45,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              17,
+              0,
+              0,
+              0,
+              28,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              6,
+              0,
+              0,
+              28,
+              0,
+              0,
+              1
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              5,
+              0,
+              0,
+              50,
+              0,
+              0
+            ],
+            [
+              0,
+              4,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              46,
+              19
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              1,
+              18
+            ]
+          ]
+        }
+      },
+      "random_split_accuracy": 0.9799
+    },
+    "knn_k5": {
+      "temporal_split": {
+        "accuracy": 0.7168,
+        "per_letter": {
+          "A": {
+            "precision": 0.9688,
+            "recall": 1.0,
+            "f1": 0.9841,
+            "test_samples": 31
+          },
+          "B": {
+            "precision": 0.0417,
+            "recall": 0.0286,
+            "f1": 0.0339,
+            "test_samples": 35
+          },
+          "C": {
+            "precision": 0.4375,
+            "recall": 0.875,
+            "f1": 0.5833,
+            "test_samples": 32
+          },
+          "D": {
+            "precision": 0.6341,
+            "recall": 1.0,
+            "f1": 0.7761,
+            "test_samples": 26
+          },
+          "E": {
+            "precision": 0.88,
+            "recall": 0.9778,
+            "f1": 0.9263,
+            "test_samples": 45
+          },
+          "F": {
+            "precision": 0.7647,
+            "recall": 0.5778,
+            "f1": 0.6582,
+            "test_samples": 45
+          },
+          "G": {
+            "precision": 0.8333,
+            "recall": 0.4286,
+            "f1": 0.566,
+            "test_samples": 35
+          },
+          "H": {
+            "precision": 0.8571,
+            "recall": 0.7636,
+            "f1": 0.8077,
+            "test_samples": 55
+          },
+          "I": {
+            "precision": 0.9649,
+            "recall": 0.7971,
+            "f1": 0.873,
+            "test_samples": 69
+          },
+          "J": {
+            "precision": 0.5652,
+            "recall": 0.6842,
+            "f1": 0.619,
+            "test_samples": 19
+          }
+        },
+        "confusion_matrix": {
+          "labels": [
+            "A",
+            "B",
+            "C",
+            "D",
+            "E",
+            "F",
+            "G",
+            "H",
+            "I",
+            "J"
+          ],
+          "rows_are_true_columns_are_predicted": [
+            [
+              31,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              1,
+              34,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              28,
+              0,
+              0,
+              0,
+              0,
+              4,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              26,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              1,
+              0,
+              0,
+              0,
+              44,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              18,
+              0,
+              0,
+              0,
+              26,
+              0,
+              1,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              7,
+              3,
+              8,
+              15,
+              2,
+              0,
+              0
+            ],
+            [
+              0,
+              1,
+              0,
+              8,
+              1,
+              0,
+              3,
+              42,
+              0,
+              0
+            ],
+            [
+              0,
+              2,
+              0,
+              0,
+              2,
+              0,
+              0,
+              0,
+              55,
+              10
+            ],
+            [
+              0,
+              2,
+              2,
+              0,
+              0,
+              0,
+              0,
+              0,
+              2,
+              13
+            ]
+          ]
+        }
+      },
+      "random_split_accuracy": 0.9925
+    },
+    "mlp_keras": {
+      "temporal_split": {
+        "accuracy": 0.7449,
+        "per_letter": {
+          "A": {
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "test_samples": 31
+          },
+          "B": {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "test_samples": 35
+          },
+          "C": {
+            "precision": 0.5246,
+            "recall": 1.0,
+            "f1": 0.6882,
+            "test_samples": 32
+          },
+          "D": {
+            "precision": 0.7879,
+            "recall": 1.0,
+            "f1": 0.8814,
+            "test_samples": 26
+          },
+          "E": {
+            "precision": 0.8333,
+            "recall": 1.0,
+            "f1": 0.9091,
+            "test_samples": 45
+          },
+          "F": {
+            "precision": 0.825,
+            "recall": 0.7333,
+            "f1": 0.7765,
+            "test_samples": 45
+          },
+          "G": {
+            "precision": 1.0,
+            "recall": 0.7714,
+            "f1": 0.871,
+            "test_samples": 35
+          },
+          "H": {
+            "precision": 1.0,
+            "recall": 0.7455,
+            "f1": 0.8542,
+            "test_samples": 55
+          },
+          "I": {
+            "precision": 0.975,
+            "recall": 0.5652,
+            "f1": 0.7156,
+            "test_samples": 69
+          },
+          "J": {
+            "precision": 0.36,
+            "recall": 0.9474,
+            "f1": 0.5217,
+            "test_samples": 19
+          }
+        },
+        "confusion_matrix": {
+          "labels": [
+            "A",
+            "B",
+            "C",
+            "D",
+            "E",
+            "F",
+            "G",
+            "H",
+            "I",
+            "J"
+          ],
+          "rows_are_true_columns_are_predicted": [
+            [
+              31,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              29,
+              0,
+              0,
+              6,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              32,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              26,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              45,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              12,
+              0,
+              0,
+              0,
+              33,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              27,
+              0,
+              0,
+              8
+            ],
+            [
+              0,
+              0,
+              0,
+              7,
+              7,
+              0,
+              0,
+              41,
+              0,
+              0
+            ],
+            [
+              0,
+              3,
+              0,
+              0,
+              2,
+              1,
+              0,
+              0,
+              39,
+              24
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              1,
+              18
+            ]
+          ]
+        }
+      },
+      "random_split_accuracy": 0.9774,
+      "temporal_accuracy_over_5_seeds": {
+        "mean": 0.8184,
+        "min": 0.7959,
+        "max": 0.8367
+      }
+    }
+  }
+}

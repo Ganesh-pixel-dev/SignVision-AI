@@ -1,46 +1,35 @@
-"""
-train_model.py
-----------------
-RUN THIS ON YOUR OWN MACHINE after collecting data with
-data_collection/collect_landmarks.py.
+"""Fit the shipped classifier on all recorded samples.
 
-Trains a small feed-forward neural network (deep learning classifier)
-on the 63-number hand-landmark vectors to recognize gesture classes.
+Run: python training/train_model.py
+Held-out numbers come from training/evaluate.py, which fits the same
+recipe on the train part of a split. This script uses every sample, so
+the saved model has seen the test part too and cannot be scored again.
 
-Why not a CNN on raw images here?
-Because our input is already a compact, meaningful feature vector
-(landmark coordinates), not pixels. A CNN is designed to learn spatial
-filters from images; feeding it 63 numbers wastes its strengths. A
-dense (fully connected) network is the correct deep learning tool for
-this kind of tabular/coordinate input, trains in seconds/minutes
-instead of hours, and typically reaches higher accuracy with far less
-data than an image-based CNN for this task.
-
-Outputs:
-    model/gesture_model.h5      - trained Keras model
-    model/label_map.json        - maps class index -> letter/gesture name
+Writes model/gesture_model.keras and model/label_map.json.
 """
 
 import json
 import os
+import sys
 
 import numpy as np
-import pandas as pd
 import tensorflow as tf
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
-from tensorflow.keras import layers, models, callbacks
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_CSV = os.path.join(BASE_DIR, "training", "dataset", "landmarks.csv")
-MODEL_DIR = os.path.join(BASE_DIR, "model")
-MODEL_PATH = os.path.join(MODEL_DIR, "gesture_model.h5")
-LABEL_MAP_PATH = os.path.join(MODEL_DIR, "label_map.json")
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.features import FEATURE_DIM
+from training.dataset import BASE_DIR, load
+
+MODEL_PATH = os.path.join(BASE_DIR, "model", "gesture_model.keras")
+LABEL_MAP_PATH = os.path.join(BASE_DIR, "model", "label_map.json")
+EPOCHS = 60  # fixed: there is no clean validation set to stop early on
+SEED = 42
 
 
-def build_model(input_dim, num_classes):
-    model = models.Sequential([
-        layers.Input(shape=(input_dim,)),
+def build_model(num_classes, seed=SEED):
+    tf.keras.utils.set_random_seed(seed)
+    layers = tf.keras.layers
+    model = tf.keras.Sequential([
+        layers.Input(shape=(FEATURE_DIM,)),
         layers.Dense(128, activation="relu"),
         layers.Dropout(0.3),
         layers.Dense(64, activation="relu"),
@@ -48,66 +37,22 @@ def build_model(input_dim, num_classes):
         layers.Dense(32, activation="relu"),
         layers.Dense(num_classes, activation="softmax"),
     ])
-    model.compile(
-        optimizer="adam",
-        loss="sparse_categorical_crossentropy",
-        metrics=["accuracy"],
-    )
+    model.compile(optimizer="adam", loss="sparse_categorical_crossentropy")
     return model
 
 
 def main():
-    if not os.path.exists(DATA_CSV):
-        print(f"ERROR: Dataset not found at {DATA_CSV}")
-        print("Run data_collection/collect_landmarks.py first.")
-        return
+    X, labels = load()
+    classes = sorted(set(labels))
+    y = np.array([classes.index(l) for l in labels])
+    print(f"{len(y)} samples, classes: {classes}")
 
-    df = pd.read_csv(DATA_CSV)
-    print(f"Loaded {len(df)} samples across classes: {sorted(df['label'].unique())}")
-
-    X = df.drop(columns=["label"]).values.astype(np.float32)
-    y_raw = df["label"].values
-
-    encoder = LabelEncoder()
-    y = encoder.fit_transform(y_raw)
-    num_classes = len(encoder.classes_)
-
-    X_train, X_val, y_train, y_val = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
-
-    model = build_model(input_dim=X.shape[1], num_classes=num_classes)
-    model.summary()
-
-    early_stop = callbacks.EarlyStopping(
-        monitor="val_accuracy", patience=15, restore_best_weights=True
-    )
-
-    history = model.fit(
-        X_train, y_train,
-        validation_data=(X_val, y_val),
-        epochs=150,
-        batch_size=32,
-        callbacks=[early_stop],
-        verbose=2,
-    )
-
-    val_loss, val_acc = model.evaluate(X_val, y_val, verbose=0)
-    print(f"\nFinal validation accuracy: {val_acc * 100:.2f}%")
-
-    os.makedirs(MODEL_DIR, exist_ok=True)
+    model = build_model(len(classes))
+    model.fit(X, y, epochs=EPOCHS, batch_size=32, verbose=0)
     model.save(MODEL_PATH)
-
-    label_map = {int(i): label for i, label in enumerate(encoder.classes_)}
     with open(LABEL_MAP_PATH, "w") as f:
-        json.dump(label_map, f, indent=2)
-
-    print(f"\nModel saved to: {MODEL_PATH}")
-    print(f"Label map saved to: {LABEL_MAP_PATH}")
-
-    if val_acc < 0.90:
-        print("\nTip: accuracy below 90%. Try collecting more samples per class,")
-        print("varying hand angle/lighting, or double-checking mislabeled samples.")
+        json.dump({str(i): c for i, c in enumerate(classes)}, f, indent=2)
+    print("saved", MODEL_PATH)
 
 
 if __name__ == "__main__":

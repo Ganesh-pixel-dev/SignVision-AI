@@ -1,176 +1,275 @@
-"""
-server.py
-----------
-RUN THIS ON YOUR OWN MACHINE.
+"""Signalling and translation server for the two-person call.
 
-Signaling + translation-bridge server for the 2-person call.
+Run: python call_app/server.py   (http://127.0.0.1:5001)
 
-What this server actually does:
-1. WebRTC signaling relay (offer/answer/ICE candidates) so two browser
-   tabs/devices can establish a direct peer-to-peer video call.
-2. Relays the shared "sign mode" toggle to both participants at once.
-3. Receives hand-landmark vectors from the deaf participant's browser
-   (extracted client-side using MediaPipe Hands via CDN), runs them
-   through the SAME trained classifier from core/, and sends the
-   predicted letter/word back to both participants (captions on the
-   hearing side).
-4. Receives recognized speech text from the hearing participant's
-   browser (Web Speech API) and matches it against the recorded
-   skeleton phrase library, telling the deaf participant's browser
-   which skeleton animation to play.
+The server relays WebRTC signalling between the two people in a room,
+keeps the room's sign-mode state, classifies hand landmarks sent by the
+signer, and turns the hearing person's speech into phrase names that the
+deaf person's browser plays back as a skeleton animation.
 
-NOTE ON SCOPE: This uses Python's `socket.io` rooms for signaling,
-which works great on localhost or the same network for a demo/college
-project. A production version would add a TURN server for NAT
-traversal across different networks - that's an infrastructure
-concern, not an AI/CV one, so it's intentionally left out here.
+Settings come from environment variables, see .env.example.
 """
 
 import json
 import os
+import re
+import secrets
 import sys
+import time
 
-from flask import Flask, jsonify, render_template, request
-from flask_socketio import SocketIO, emit, join_room
+from flask import Flask, abort, jsonify, render_template, request
+from flask_socketio import SocketIO, emit, join_room, leave_room
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.gesture_classifier import GestureClassifier
+from core.features import BROWSER_MIRRORED
 from core.word_builder import WordBuilder
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKELETON_LIB_DIR = os.path.join(BASE_DIR, "skeleton", "library")
 
-app = Flask(__name__)
-app.config["SECRET_KEY"] = "signvision-dev-secret"
-socketio = SocketIO(app, cors_allowed_origins="*")
-
-# One shared word-builder per room (simple demo scope: single active room state)
-room_word_builders = {}
-
-try:
-    classifier = GestureClassifier()
-    MODEL_READY = True
-except FileNotFoundError:
-    classifier = None
-    MODEL_READY = False
+ROOM_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+MAX_PEOPLE = 2
+MAX_SPEECH_CHARS = 300
+MAX_SIGNAL_BYTES = 20000
+MIN_LANDMARK_INTERVAL = 0.04  # seconds; messages arriving faster are dropped
+DEFAULT_ICE_SERVERS = [{"urls": "stun:stun.l.google.com:19302"}]
 
 
-def get_available_phrases():
-    if not os.path.exists(SKELETON_LIB_DIR):
+def load_dotenv_if_present():
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    load_dotenv(os.path.join(BASE_DIR, ".env"))
+
+
+def ice_servers_from_env():
+    """ICE_SERVERS is a JSON list. Without it, one public STUN server is used."""
+    raw = os.environ.get("ICE_SERVERS", "").strip()
+    if not raw:
+        return DEFAULT_ICE_SERVERS
+    try:
+        servers = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"ICE_SERVERS is not valid JSON: {exc}") from exc
+    if not isinstance(servers, list) or not all(isinstance(s, dict) and "urls" in s for s in servers):
+        raise RuntimeError('ICE_SERVERS must be a JSON list of objects with a "urls" key')
+    return servers
+
+
+def list_phrases(lib_dir):
+    if not os.path.isdir(lib_dir):
         return []
-    return sorted(
-        f[:-5] for f in os.listdir(SKELETON_LIB_DIR) if f.endswith(".json")
-    )
+    return sorted(f[:-5] for f in os.listdir(lib_dir) if f.endswith(".json"))
 
 
-def match_phrase(spoken_text):
-    """
-    Very simple matcher: checks if any recorded phrase appears as a
-    whole word/phrase inside the spoken text. Swap this for something
-    smarter (fuzzy matching, stemming) as your phrase library grows.
-    """
-    if not spoken_text:
+def match_phrases(spoken_text, phrases):
+    """Phrases found as whole words in the text, in the order they were spoken."""
+    found = []
+    for phrase in phrases:
+        m = re.search(r"\b" + re.escape(phrase) + r"\b", spoken_text, flags=re.IGNORECASE)
+        if m:
+            found.append((m.start(), phrase))
+    return [p for _, p in sorted(found)]
+
+
+def valid_landmarks(value):
+    if not isinstance(value, list) or len(value) != 21:
+        return False
+    for point in value:
+        if not isinstance(point, list) or len(point) != 3:
+            return False
+        if not all(isinstance(c, (int, float)) and not isinstance(c, bool) and abs(c) < 1e3 for c in point):
+            return False
+    return True
+
+
+class Room:
+    def __init__(self):
+        self.members = []
+        self.sign_mode = False
+        self.signer = None
+        self.words = WordBuilder()
+
+
+def create_app(classifier=None, phrase_dir=SKELETON_LIB_DIR):
+    app = Flask(__name__)
+    app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
+    origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
+    socketio = SocketIO(app, cors_allowed_origins=origins or None)
+
+    ice_servers = ice_servers_from_env()
+    rooms = {}
+    sid_room = {}
+    last_landmark = {}
+
+    def tell(message):
+        emit("error_message", {"message": message})
+
+    def room_of(sid):
+        name = sid_room.get(sid)
+        return (name, rooms[name]) if name in rooms else (None, None)
+
+    def leave(sid):
+        name, room = room_of(sid)
+        sid_room.pop(sid, None)
+        last_landmark.pop(sid, None)
+        if room is None:
+            return
+        if sid in room.members:
+            room.members.remove(sid)
+        leave_room(name, sid=sid)
+        if room.signer == sid:
+            room.sign_mode, room.signer = False, None
+            room.words.reset()
+            emit("sign_mode_changed", {"enabled": False, "signer": None}, to=name)
+        if room.members:
+            emit("peer_left", {"sid": sid}, to=name)
+        else:
+            del rooms[name]
+
+    @app.route("/")
+    def index():
+        return render_template("room.html")
+
+    @app.route("/config")
+    def config():
+        return jsonify({"iceServers": ice_servers, "modelReady": classifier is not None})
+
+    @app.route("/available_phrases")
+    def available_phrases():
+        return jsonify(list_phrases(phrase_dir))
+
+    @app.route("/skeleton_data/<phrase>")
+    def skeleton_data(phrase):
+        name = phrase.upper()
+        if name not in list_phrases(phrase_dir):
+            abort(404)
+        with open(os.path.join(phrase_dir, name + ".json")) as f:
+            return jsonify(json.load(f))
+
+    @socketio.on("join")
+    def on_join(data):
+        sid = request.sid
+        name = data.get("room") if isinstance(data, dict) else None
+        if not isinstance(name, str) or not ROOM_RE.match(name):
+            return emit("join_error", {"reason": "bad_room",
+                                       "message": "Room names use letters, digits, - and _ (up to 40 characters)."})
+        if sid_room.get(sid) == name:
+            return
+        leave(sid)
+        room = rooms.setdefault(name, Room())
+        if len(room.members) >= MAX_PEOPLE:
+            return emit("join_error", {"reason": "room_full",
+                                       "message": f"Room {name} already has {MAX_PEOPLE} people."})
+        others = list(room.members)
+        room.members.append(sid)
+        sid_room[sid] = name
+        join_room(name)
+        emit("joined", {"room": name, "sid": sid, "peers": others, "signMode": room.sign_mode,
+                        "signer": room.signer, "modelReady": classifier is not None})
+        emit("peer_joined", {"sid": sid}, to=name, include_self=False)
+
+    @socketio.on("leave")
+    def on_leave(data=None):
+        leave(request.sid)
+
+    @socketio.on("disconnect")
+    def on_disconnect(*_):
+        leave(request.sid)
+
+    @socketio.on("signal")
+    def on_signal(data):
+        name, room = room_of(request.sid)
+        if room is None or not isinstance(data, dict) or data.get("type") not in ("offer", "answer", "candidate"):
+            return
+        if len(json.dumps(data)) > MAX_SIGNAL_BYTES:
+            return tell("Signalling message too large.")
+        payload = {k: data[k] for k in ("type", "sdp", "candidate") if k in data}
+        emit("signal", payload, to=name, include_self=False)
+
+    @socketio.on("toggle_sign_mode")
+    def on_toggle(data):
+        name, room = room_of(request.sid)
+        if room is None or not isinstance(data, dict) or not isinstance(data.get("enabled"), bool):
+            return
+        enabled = data["enabled"]
+        room.sign_mode = enabled
+        room.signer = request.sid if enabled else None
+        room.words.reset()
+        emit("sign_mode_changed", {"enabled": enabled, "signer": room.signer}, to=name)
+
+    @socketio.on("hand_landmarks")
+    def on_hand_landmarks(data):
+        name, room = room_of(request.sid)
+        if room is None or not room.sign_mode or room.signer != request.sid:
+            return
+        if classifier is None:
+            return tell("No trained model found. Run training/train_model.py.")
+        landmarks = data.get("landmarks") if isinstance(data, dict) else None
+        if not valid_landmarks(landmarks):
+            return tell("Landmarks must be 21 points of [x, y, z].")
+        now = time.monotonic()
+        if now - last_landmark.get(request.sid, 0) < MIN_LANDMARK_INTERVAL:
+            return
+        last_landmark[request.sid] = now
+
+        letter, confidence = classifier.predict_landmarks(landmarks, mirror=BROWSER_MIRRORED)
+        word = room.words.update(letter, confidence)
+        emit("sign_prediction", {"letter": letter, "confidence": round(confidence * 100, 1), "word": word}, to=name)
+
+    @socketio.on("hand_lost")
+    def on_hand_lost(data=None):
+        name, room = room_of(request.sid)
+        if room is None or room.signer != request.sid:
+            return
+        word = room.words.update(None, 0.0)
+        emit("sign_prediction", {"letter": None, "confidence": 0.0, "word": word}, to=name)
+
+    @socketio.on("commit_word")
+    def on_commit(data=None):
+        name, room = room_of(request.sid)
+        if room is None or room.signer != request.sid:
+            return
+        emit("word_committed", {"word": room.words.commit_word()}, to=name)
+
+    @socketio.on("backspace")
+    def on_backspace(data=None):
+        name, room = room_of(request.sid)
+        if room is None or room.signer != request.sid:
+            return
+        room.words.backspace()
+        emit("sign_prediction", {"letter": None, "confidence": 0.0, "word": room.words.current_word}, to=name)
+
+    @socketio.on("speech_text")
+    def on_speech_text(data):
+        name, room = room_of(request.sid)
+        text = data.get("text") if isinstance(data, dict) else None
+        if room is None or not isinstance(text, str):
+            return
+        text = text.strip()[:MAX_SPEECH_CHARS]
+        if not text:
+            return
+        emit("speech_caption", {"text": text}, to=name)
+        phrases = match_phrases(text, list_phrases(phrase_dir))
+        if phrases:
+            emit("play_sign", {"phrases": phrases}, to=name)
+
+    app.rooms = rooms
+    return app, socketio
+
+
+def load_classifier():
+    try:
+        from core.gesture_classifier import GestureClassifier
+        return GestureClassifier()
+    except FileNotFoundError as exc:
+        print(f"[warning] {exc} Sign recognition is off.")
         return None
-    spoken_upper = spoken_text.upper()
-    for phrase in get_available_phrases():
-        if phrase in spoken_upper:
-            return phrase
-    return None
-
-
-@app.route("/")
-def index():
-    return render_template("room.html", model_ready=MODEL_READY)
-
-
-@app.route("/skeleton_data/<phrase>")
-def skeleton_data(phrase):
-    path = os.path.join(SKELETON_LIB_DIR, f"{phrase.upper()}.json")
-    if not os.path.exists(path):
-        return jsonify({"error": "not found"}), 404
-    with open(path, "r") as f:
-        data = json.load(f)
-    return jsonify(data)
-
-
-@app.route("/available_phrases")
-def available_phrases():
-    return jsonify(get_available_phrases())
-
-
-# ---------------- Socket.IO signaling ----------------
-
-@socketio.on("join")
-def on_join(data):
-    room = data["room"]
-    join_room(room)
-    room_word_builders.setdefault(room, WordBuilder())
-    emit("peer_joined", {"sid": request.sid}, room=room, include_self=False)
-
-
-@socketio.on("signal")
-def on_signal(data):
-    """Relay WebRTC offer/answer/ICE candidates to the other peer in the room."""
-    room = data["room"]
-    emit("signal", data, room=room, include_self=False)
-
-
-@socketio.on("toggle_sign_mode")
-def on_toggle_sign_mode(data):
-    room = data["room"]
-    enabled = data["enabled"]
-    emit("sign_mode_changed", {"enabled": enabled}, room=room, include_self=False)
-    emit("sign_mode_changed", {"enabled": enabled}, room=room, include_self=True)
-
-
-@socketio.on("hand_landmarks")
-def on_hand_landmarks(data):
-    """
-    data = {"room": ..., "features": [63 floats]}
-    Sent continuously from the deaf participant's browser while in sign mode.
-    """
-    room = data["room"]
-    if not MODEL_READY:
-        return
-    features = data.get("features")
-    if not features or len(features) != 63:
-        return
-
-    label, confidence = classifier.predict(__import__("numpy").array(features, dtype="float32"))
-    wb = room_word_builders.setdefault(room, WordBuilder())
-    word = wb.update(label, confidence)
-
-    emit("sign_prediction", {
-        "letter": label,
-        "confidence": round(confidence * 100, 1),
-        "word": word,
-    }, room=room)  # send to both, including the signer (so they see their own captions)
-
-
-@socketio.on("commit_word")
-def on_commit_word(data):
-    room = data["room"]
-    wb = room_word_builders.setdefault(room, WordBuilder())
-    word = wb.commit_word()
-    emit("word_committed", {"word": word}, room=room)
-
-
-@socketio.on("speech_text")
-def on_speech_text(data):
-    """
-    data = {"room": ..., "text": "hello how are you"}
-    Sent from the hearing participant's browser via Web Speech API.
-    """
-    room = data["room"]
-    text = data.get("text", "")
-    matched_phrase = match_phrase(text)
-    emit("speech_caption", {"text": text}, room=room)
-    if matched_phrase:
-        emit("play_sign", {"phrase": matched_phrase}, room=room)
 
 
 if __name__ == "__main__":
-    if not MODEL_READY:
-        print("[WARNING] No trained model found - sign predictions disabled.")
-        print("Run training/train_model.py first for full functionality.")
-    socketio.run(app, debug=True, port=5001)
+    load_dotenv_if_present()
+    app, socketio = create_app(load_classifier())
+    socketio.run(app, host=os.environ.get("HOST", "127.0.0.1"), port=int(os.environ.get("PORT", "5001")),
+                 debug=os.environ.get("FLASK_DEBUG") == "1", allow_unsafe_werkzeug=True)
