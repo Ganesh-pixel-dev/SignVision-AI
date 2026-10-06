@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SignVision AI</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <header class="topbar">
+        <div class="logo">Sign<span>Vision</span> AI</div>
+        <div class="status" id="modelStatus">Checking model...</div>
+    </header>
+
+    <main class="dashboard">
+        <section class="camera-panel">
+            <img src="{{ url_for('video_feed') }}" alt="Live camera feed">
+        </section>
+
+        <section class="info-panel">
+            <div class="card">
+                <div class="card-label">Detected Letter</div>
+                <div class="big-letter" id="detectedLetter">-</div>
+            </div>
+
+            <div class="card">
+                <div class="card-label">Confidence</div>
+                <div class="confidence-bar-bg">
+                    <div class="confidence-bar-fill" id="confidenceFill"></div>
+                </div>
+                <div class="confidence-text" id="confidenceText">0%</div>
+            </div>
+
+            <div class="card">
+                <div class="card-label">Current Word</div>
+                <div class="current-word" id="currentWord">&nbsp;</div>
+                <div class="button-row">
+                    <button id="speakBtn" class="btn btn-primary">🔊 Speak</button>
+                    <button id="backspaceBtn" class="btn">⌫ Backspace</button>
+                    <button id="resetBtn" class="btn btn-danger">Reset</button>
+                </div>
+            </div>
+
+            <div class="card history-card">
+                <div class="card-label">Recognition History</div>
+                <ul id="historyList"></ul>
+            </div>
+        </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>

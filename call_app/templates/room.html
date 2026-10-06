@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SignVision AI - Call</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <header class="topbar">
+        <div class="logo">Sign<span>Vision</span> Call</div>
+        <div class="room-join">
+            Room: <input id="roomInput" value="demo-room" />
+            <button id="joinBtn" class="btn btn-primary">Join</button>
+        </div>
+        <label class="switch-wrap">
+            <span>Sign Mode</span>
+            <label class="switch">
+                <input type="checkbox" id="signModeToggle">
+                <span class="slider"></span>
+            </label>
+        </label>
+    </header>
+
+    {% if not model_ready %}
+    <div class="banner-warning">
+        No trained gesture model found yet - sign recognition is disabled until you run training/train_model.py
+    </div>
+    {% endif %}
+
+    <main class="call-grid">
+        <section class="video-tile">
+            <h3>You</h3>
+            <div class="video-wrap">
+                <video id="localVideo" autoplay muted playsinline></video>
+                <canvas id="localHandCanvas"></canvas>
+            </div>
+            <div class="caption" id="localCaption">&nbsp;</div>
+        </section>
+
+        <section class="video-tile">
+            <h3>Other Participant</h3>
+            <div class="video-wrap">
+                <video id="remoteVideo" autoplay playsinline></video>
+                <canvas id="skeletonCanvas" width="480" height="480"></canvas>
+            </div>
+            <div class="caption" id="remoteCaption">&nbsp;</div>
+        </section>
+    </main>
+
+    <footer class="call-footer">
+        <div class="footer-info">
+            <strong>How sign mode works:</strong>
+            Toggle it on when one participant is deaf. Both screens change:
+            the hearing side sees the deaf side's signs translated to text/speech,
+            and the deaf side sees the hearing side's speech translated to an
+            animated sign skeleton.
+        </div>
+    </footer>
+
+    <script src="{{ url_for('static', filename='js/vendor/socket.io.min.js') }}"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="{{ url_for('static', filename='js/call.js') }}"></script>
+</body>
+</html>
